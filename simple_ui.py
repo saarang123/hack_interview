@@ -2,7 +2,8 @@ import numpy as np
 import PySimpleGUI as sg
 from loguru import logger
 
-from src import audio, llm
+from src import audio
+from src.llm import LLMInference
 from src.constants import APPLICATION_WIDTH, OFF_IMAGE, ON_IMAGE
 
 logger.add("debug.log", level="DEBUG", rotation="3 MB", compression="zip")
@@ -69,6 +70,7 @@ def background_recording_loop() -> None:
             audio_data = np.vstack((audio_data, audio_sample))
     audio.save_audio_file(audio_data)
 
+llm = LLMInference()
 
 while True:
     event, values = WINDOW.read()
@@ -104,7 +106,7 @@ while True:
         # Generate full answer:
         full_chat_gpt_answer.update("Chatgpt is working...")
         WINDOW.perform_long_operation(
-            lambda: llm.generate_answer(audio_transcript, short_answer=False, temperature=0.7),
+            lambda: llm.generate_answer(audio_transcript, short_answer=False, temperature=0.5),
             "-CHAT_GPT LONG ANSWER-",
         )
     elif event == "-CHAT_GPT SHORT ANSWER-":

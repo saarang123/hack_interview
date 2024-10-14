@@ -1,4 +1,4 @@
-INTERVIEW_POSTION = "python developer"
+DEEPGRAM_API_KEY = ""
 OPENAI_API_KEY = ""
 
 OUTPUT_FILE_NAME = "out.wav"  # audio file name.

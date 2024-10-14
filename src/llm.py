@@ -29,7 +29,10 @@ def transcribe_audio(path_to_file: str = OUTPUT_FILE_NAME) -> str:
     """
     with open(path_to_file, "rb") as audio_file:
         try:
-            transcript = openai.Audio.translate("whisper-1", audio_file)
+            transcript = openai.Audio.transcribe(
+                model="whisper-1", 
+                file=audio_file
+            )
         except Exception as error:
             logger.error(f"Can't transcribe audio: {error}")
             raise error
@@ -64,7 +67,7 @@ def generate_answer(transcript: str, short_answer: bool = True, temperature: flo
         system_prompt = SYSTEM_PROMPT + LONGER_INSTRACT
     try:
         response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             temperature=temperature,
             messages=[
                 {"role": "system", "content": system_prompt},

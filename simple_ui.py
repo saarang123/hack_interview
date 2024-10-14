@@ -5,6 +5,7 @@ from loguru import logger
 from src import audio, llm
 from src.constants import APPLICATION_WIDTH, OFF_IMAGE, ON_IMAGE
 
+logger.add("debug.log", level="DEBUG", rotation="3 MB", compression="zip")
 
 def get_text_area(text: str, size: tuple) -> sg.Text:
     """
@@ -71,18 +72,20 @@ def background_recording_loop() -> None:
 
 while True:
     event, values = WINDOW.read()
+    print("in while true", event, values)
     if event in ["Cancel", sg.WIN_CLOSED]:
         logger.debug("Closing...")
         break
 
-    if event in ("r", "R"):  # start recording
+    if event == "r:27":  # start recording
+        print("event r")
         logger.debug("Starting recording...")
         record_status_button.metadata.state = not record_status_button.metadata.state
         if record_status_button.metadata.state:
             WINDOW.perform_long_operation(background_recording_loop, "-RECORDING-")
         record_status_button.update(image_data=ON_IMAGE if record_status_button.metadata.state else OFF_IMAGE)
 
-    elif event in ("a", "A"):  # send audio to OpenAI Whisper model
+    elif event == "a:38":  # send audio to OpenAI Whisper model
         logger.debug("Analyzing audio...")
         analyzed_text_label.update("Start analyzing...")
         WINDOW.perform_long_operation(llm.transcribe_audio, "-WHISPER COMPLETED-")

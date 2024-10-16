@@ -1,12 +1,9 @@
 import openai
+import numpy as np
 from loguru import logger
-from deepgram import (
-    DeepgramClient,
-    PrerecordedOptions,
-    FileSource,
-)
 
 from src.constants import DEEPGRAM_API_KEY, OPENAI_API_KEY, OUTPUT_FILE_NAME
+from src.constants import OUTPUT_FILE_NAME, RECORD_SEC, SAMPLE_RATE
 
 
 SYSTEM_PROMPT = f"""You are a sales agent for Avoca Air Condioning company.
@@ -42,50 +39,9 @@ LONGER_INSTRACT = (
 )
 
 
-# Install the Deepgram Python SDK
-# pip install deepgram-sdk==3.*
-
 class LLMInference:
     def __init__(self):
-        self.deepgram = DeepgramClient(DEEPGRAM_API_KEY)
         openai.api_key = OPENAI_API_KEY
-
-    def transcribe_audio(self, path_to_file: str = OUTPUT_FILE_NAME) -> str:
-        """
-        Transcribes an audio file into text.
-
-        Args:
-            path_to_file (str, optional): The path to the audio file to be transcribed.
-
-        Returns:
-            str: The transcribed text.
-
-        Raises:
-            Exception: If the audio file fails to transcribe.
-        """
-        print("transcribe: ", path_to_file)
-        with open(path_to_file, "rb") as audio_file:
-            try:
-                buffer_data = audio_file.read()
-
-                payload: FileSource = {
-                    "buffer": buffer_data,
-                }
-
-                options = PrerecordedOptions(
-                    model="nova-2",
-                    smart_format=True,
-                )
-
-                response = self.deepgram.listen.rest.v("1").transcribe_file(payload, options)
-
-                print(response.to_json(indent=4))
-
-            except Exception as error:
-                logger.error(f"Can't transcribe audio: {error}")
-                raise error
-        return response["results"]["channels"][0]["alternatives"][0]["transcript"]
-
 
     def generate_answer(self, transcript: str, short_answer: bool = True, temperature: float = 0.4) -> str:
         """
@@ -126,8 +82,6 @@ class LLMInference:
             logger.error(f"Can't generate answer: {error}")
             raise error
         return response["choices"][0]["message"]["content"]
-
-
 
 # llm = LLMInference()
 

@@ -5,8 +5,17 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon, QPixmap
 from loguru import logger
+import asyncio
 
-from .threads import *
+from .threads import (
+    start_transcription, 
+    process_audio, 
+    handle_transcription, 
+    stop_transcription
+)
+from .threads import ChatGPTThread
+
+
 from .llm import LLMInference
 from .constants import APPLICATION_WIDTH, OFF_IMAGE, ON_IMAGE
 
@@ -97,15 +106,15 @@ class MainWindow(QWidget):
             self.stop_recording_thread()
 
     def start_recording_thread(self):
-        if self.recording_thread is None:
-            self.recording_thread = RecordingThread()
-            self.recording_thread.start()
-        elif not self.recording_thread.isRunning():
-            self.recording_thread.start()
+        if not self.recording_thread:
+            self.recording_thread = True
+            start_transcription()
+            asyncio.run(process_audio())
 
     def stop_recording_thread(self):
-        if self.recording_thread and self.recording_thread.isRunning() and self.recording_thread.is_final:
-            self.audio_transcript = self.recording_thread.stop()
+        if self.recording_thread:
+            self.audio_transcript = stop_transcription()
+            self.recording_thread = False
 
     def handle_transcription_done(self):
         if self.audio_transcript == None:
@@ -136,8 +145,8 @@ class MainWindow(QWidget):
 
     def closeEvent(self, event):
         # Clean up threads when closing
-        if self.recording_thread and self.recording_thread.isRunning():
-            self.recording_thread.stop()
+        if self.recording_thread:
+            stop_transcription()
         if self.transcribe_thread and self.transcribe_thread.isRunning():
             self.transcribe_thread.quit()
         if self.quick_answer_thread and self.quick_answer_thread.isRunning():

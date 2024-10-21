@@ -1,7 +1,9 @@
 from PyQt5.QtCore import QThread, pyqtSignal
 import numpy as np
 from loguru import logger
+import asyncio
 import soundcard as sc
+import websockets
 from deepgram import (
     DeepgramClient,
     PrerecordedOptions,
@@ -9,88 +11,139 @@ from deepgram import (
     LiveTranscriptionEvents,
     LiveOptions
 )
+import numpy as np
+import json
 
 from .constants import DEEPGRAM_API_KEY
 from .constants import OUTPUT_FILE_NAME, RECORD_SEC, SAMPLE_RATE
 
-URL = f"wss://api.deepgram.com/v1/listen?access_token={DEEPGRAM_API_KEY}"
+deepgram_client = DeepgramClient(DEEPGRAM_API_KEY)
 
 SPEAKER_ID = str(sc.default_speaker().name)
 
-class RecordingThread(QThread):
-    transcription_done = pyqtSignal(str)
-    def __init__(self):
-        super().__init__()
-        self.is_running = True
-        self.is_final = False
-        self.transcribed_data = None
-        self.deepgram = DeepgramClient(DEEPGRAM_API_KEY)
-        self.dg_connection = self.deepgram.listen.live.v("1")
-        self.dg_connection.on(LiveTranscriptionEvents.Transcript, self.on_message)
-        self.dg_connection.on(LiveTranscriptionEvents.Metadata, self.on_metadata)
-        self.dg_connection.on(LiveTranscriptionEvents.Error, self.on_error)
-        
-        self.options = LiveOptions(
-            model="nova-2", 
-            language="en-US", 
-            smart_format=True,
-        )
-        
-        # STEP 6: Start the connection
+is_running = True
+is_finals = []
+is_done = False
+transcribed_data = ""
 
-    def run(self):
-        # change to post to deepgram socket
-        logger.debug("Recording thread started")
-        self.dg_connection.start(self.options)
-        mic = sc.get_microphone(id=SPEAKER_ID, include_loopback=True)
-        try:
-            # Open the microphone recorder
-            with mic.recorder(samplerate=SAMPLE_RATE) as recorder:
-                logger.info("Started recording system audio...")
 
-                while self.is_running:
-                    # Record a small chunk of audio data
-                    audio_chunk = recorder.record(numframes=SAMPLE_RATE // 10)  # 0.1 second chunks
-                    
-                    # Convert the audio data to bytes
-                    audio_bytes = audio_chunk.tobytes()
+# 1. Start Transcription
+def start_transcription():
+    global is_finals, transcribed_data, is_done
+    global dg_connection
 
-                    # Send the bytes to the WebSocket connection
-                    self.dg_connection.send(audio_bytes)
-                    self.is_final = False
-                # recorder.__exit__(None, None, None)
-        except Exception as e:
-            logger.error(f"Error while recording or streaming audio: {e}")
+    logger.debug("Starting transcription...")
 
-        logger.debug("Recording thread finished")
+    # Initialize Deepgram connection with LiveOptions
+    options = LiveOptions(
+        model="nova-2",
+        language="en-US",
+        smart_format=True,
+        encoding="linear16",
+        interim_results=False,
+        sample_rate=SAMPLE_RATE,
+        channels=1,
+    )
 
-    def on_message(self, client, result, **kwargs):
-        sentence = result.channel.alternatives[0].transcript
+    # Establish Deepgram WebSocket connection
+    dg_connection = deepgram_client.listen.websocket.v("1")
+
+    # Define event listeners
+    dg_connection.on(LiveTranscriptionEvents.Transcript, handle_transcription)
+    dg_connection.on(LiveTranscriptionEvents.Close, on_close)
+    dg_connection.on(LiveTranscriptionEvents.Error, on_error)
+    dg_connection.on(LiveTranscriptionEvents.Open, on_open)
+    dg_connection.on(LiveTranscriptionEvents.Metadata, on_metadata)
+
+    # Start the connection
+    if not dg_connection.start(options):
+        logger.error("Failed to connect to Deepgram")
+        return False
+
+    is_running = True
+    is_finals = []
+    is_done = False
+    transcribed_data = ""
+
+    return True
+
+# 2. Process Audio (Recording)
+async def process_audio():
+    global is_running
+
+    mic = sc.get_microphone(id=SPEAKER_ID, include_loopback=True)
+
+    try:
+        with mic.recorder(samplerate=SAMPLE_RATE) as recorder:
+            logger.info("Started recording system audio...")
+            cnt = 0
+            while is_running:
+                # Record a small chunk of audio data
+                audio_chunk = recorder.record(numframes=SAMPLE_RATE // 10)  # 0.1 second chunks
+                audio_chunk_int16 = np.int16(audio_chunk * 32767)
+                audio_bytes = audio_chunk_int16.tobytes()
+
+                # Send the bytes to the WebSocket connection
+                dg_connection.send(audio_bytes)
+
+                if cnt % 30 == 0:
+                    keep_alive_msg = json.dumps({"type": "KeepAlive"})
+                    dg_connection.send(keep_alive_msg)
+
+                cnt += 1
+
+    except KeyboardInterrupt as e:
+        logger.error(f"Error while recording or streaming audio: {e}")
+
+def stop_transcription():
+    global is_running, is_done
+
+    is_running = False
+
+    # Send a finalize message to Deepgram
+    finalize_msg = json.dumps({"type": "Finalize"})
+    dg_connection.send(finalize_msg)
+
+    # Wait for final transcription to be done
+    while not is_done:
+        pass
+
+    # Close the connection
+    dg_connection.finish()
+    logger.debug("Transcription done")
+
+    return transcribed_data
+
+# 3. Handle Transcription (Callback)
+def handle_transcription(self, result, **kwargs):
+    global is_finals, transcribed_data, is_done
+
+    sentence = result.channel.alternatives[0].transcript
+    if len(sentence) == 0:
+        return
+
+    if result.is_final:
+        is_finals.append(sentence)
         if result.speech_final:
-            self.is_final = True
-        logger.debug("received transcription from deepgram socket")
-        if len(sentence) == 0:
-            return
-        self.transcription_data += sentence
-        print(f"speaker: {sentence}")
+            utterance = " ".join(is_finals)
+            transcribed_data += utterance
+            print(f"Final Transcription: {utterance}")
+            is_finals = []
 
-    def on_metadata(self, client, metadata, **kwargs):
-        logger.debug("received metadata from deepgram socket")
-        print(f"\n\n{metadata}\n\n")
-        print("huh")
+    if result.from_finalize:
+        is_done = True
 
-    def on_error(self, client, error, **kwargs):
-        logger.debug("error transcribing from deepgram socket")
-        print(f"\n\n{error}\n\n")
+def on_open(self, open, **kwargs):
+    logger.debug("Connection Open")
 
-    def stop(self):
-        self.is_running = False
-        self.dg_connection.finish()
-        print("stop RecordingThread")
-        while not self.is_final:
-            pass
-        logger.debug("Transcription done")
-        return transcription_data
+def on_metadata(self, metadata, **kwargs):
+    logger.debug(f"Metadata: {metadata}")
+
+def on_close(self, close, **kwargs):
+    logger.debug("Connection Closed")
+
+def on_error(self, error, **kwargs):
+    logger.debug(f"Handled Error: {error}")
 
 class ChatGPTThread(QThread):
     answer_ready = pyqtSignal(str)
@@ -103,6 +156,7 @@ class ChatGPTThread(QThread):
         self.temperature = temperature
 
     def run(self):
+        print("do i even run")
         answer = self.llm.generate_answer(
             self.audio_transcript,
             short_answer=self.short_answer,

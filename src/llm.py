@@ -2,6 +2,7 @@ import openai
 import numpy as np
 from loguru import logger
 
+
 from src.constants import DEEPGRAM_API_KEY, OPENAI_API_KEY, OUTPUT_FILE_NAME
 from src.constants import OUTPUT_FILE_NAME, RECORD_SEC, SAMPLE_RATE
 

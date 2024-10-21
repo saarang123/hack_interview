@@ -1,10 +1,18 @@
 import numpy as np
 import PySimpleGUI as sg
 from loguru import logger
+import asyncio
 
-from src import audio
-from src.llm import LLMInference
 from src.constants import APPLICATION_WIDTH, OFF_IMAGE, ON_IMAGE
+
+from src.threads import (
+    start_transcription, 
+    process_audio, 
+    handle_transcription, 
+    stop_transcription,
+    generate_answer
+)
+
 
 logger.add("debug.log", level="DEBUG", rotation="3 MB", compression="zip")
 
@@ -31,17 +39,20 @@ class BtnInfo:
     def __init__(self, state=False):
         self.state = state
 
+with open(ON_IMAGE, 'rb') as f: on_data = f.read()
+with open(OFF_IMAGE, 'rb') as f: off_data = f.read()
 
 # All the stuff inside your window:
 sg.theme("DarkAmber")  # Add a touch of color
 record_status_button = sg.Button(
-    image_data=OFF_IMAGE,
+    image_data=off_data,
     k="-TOGGLE1-",
     border_width=0,
     button_color=(sg.theme_background_color(), sg.theme_background_color()),
     disabled_button_color=(sg.theme_background_color(), sg.theme_background_color()),
     metadata=BtnInfo(),
 )
+
 analyzed_text_label = get_text_area("", size=(APPLICATION_WIDTH, 2))
 quick_chat_gpt_answer = get_text_area("", size=(APPLICATION_WIDTH, 5))
 full_chat_gpt_answer = get_text_area("", size=(APPLICATION_WIDTH, 12))
@@ -57,20 +68,9 @@ layout = [
     [full_chat_gpt_answer],
     [sg.Button("Cancel")],
 ]
-WINDOW = sg.Window("Keyboard Test", layout, return_keyboard_events=True, use_default_focus=False)
+WINDOW = sg.Window("Avoca AI", layout, return_keyboard_events=True, use_default_focus=False)
 
-
-def background_recording_loop() -> None:
-    audio_data = None
-    while record_status_button.metadata.state:
-        audio_sample = audio.record_batch()
-        if audio_data is None:
-            audio_data = audio_sample
-        else:
-            audio_data = np.vstack((audio_data, audio_sample))
-    audio.save_audio_file(audio_data)
-
-llm = LLMInference()
+audio_transcript = None
 
 while True:
     event, values = WINDOW.read()
@@ -81,32 +81,60 @@ while True:
 
     if event == "r:27":  # start recording
         print("event r")
-        logger.debug("Starting recording...")
         record_status_button.metadata.state = not record_status_button.metadata.state
         if record_status_button.metadata.state:
-            WINDOW.perform_long_operation(background_recording_loop, "-RECORDING-")
-        record_status_button.update(image_data=ON_IMAGE if record_status_button.metadata.state else OFF_IMAGE)
+            logger.debug("Starting recording...")
+            is_transcribed = False
+            audio_transcript = None
+            assert(start_transcription())
+            # asyncio.run(process_audio())
+            WINDOW.perform_long_operation(process_audio, "-RECORDING-")
+        else:
+            logger.debug("Stopping recording...")
+            audio_transcript = stop_transcription()
+            is_transcribed = True
+        record_status_button.update(image_data=on_data if record_status_button.metadata.state else off_data)
 
     elif event == "a:38":  # send audio to OpenAI Whisper model
         logger.debug("Analyzing audio...")
         analyzed_text_label.update("Start analyzing...")
-        WINDOW.perform_long_operation(llm.transcribe_audio, "-WHISPER COMPLETED-")
+        
+        if not is_transcribed or audio_transcript is None:
+            analyzed_text_label.update("Stop recording before analyzing")
+            continue
 
-    elif event == "-WHISPER COMPLETED-":
-        audio_transcript = values["-WHISPER COMPLETED-"]
         analyzed_text_label.update(audio_transcript)
 
         # Generate quick answer:
         quick_chat_gpt_answer.update("Chatgpt is working...")
         WINDOW.perform_long_operation(
-            lambda: llm.generate_answer(audio_transcript, short_answer=True, temperature=0),
+            lambda: generate_answer(audio_transcript, short_answer=True, temperature=0.3),
             "-CHAT_GPT SHORT ANSWER-",
         )
 
         # Generate full answer:
         full_chat_gpt_answer.update("Chatgpt is working...")
         WINDOW.perform_long_operation(
-            lambda: llm.generate_answer(audio_transcript, short_answer=False, temperature=0.5),
+            lambda: generate_answer(audio_transcript, short_answer=False, temperature=0.7),
+            "-CHAT_GPT LONG ANSWER-",
+        )
+
+    elif event == "-WHISPER COMPLETED-":
+        is_transcribed = True
+        audio_transcript = values["-WHISPER COMPLETED-"]
+        analyzed_text_label.update(audio_transcript)
+
+        # Generate quick answer:
+        quick_chat_gpt_answer.update("Chatgpt is working...")
+        WINDOW.perform_long_operation(
+            lambda: generate_answer(audio_transcript, short_answer=True, temperature=0.3),
+            "-CHAT_GPT SHORT ANSWER-",
+        )
+
+        # Generate full answer:
+        full_chat_gpt_answer.update("Chatgpt is working...")
+        WINDOW.perform_long_operation(
+            lambda: generate_answer(audio_transcript, short_answer=False, temperature=0.7),
             "-CHAT_GPT LONG ANSWER-",
         )
     elif event == "-CHAT_GPT SHORT ANSWER-":
